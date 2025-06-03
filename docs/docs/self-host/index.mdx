@@ -5,6 +5,9 @@ id: index
 slug: /self-host
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Self Hosting GrowthBook
 
 GrowthBook consists of a NextJS front-end, an ExpressJS API, and a Python stats engine. Everything is bundled together in a single [Docker Image](https://hub.docker.com/r/growthbook/growthbook).
@@ -72,3 +75,391 @@ docker-compose pull growthbook
 docker-compose stop growthbook
 docker-compose up -d growthbook
 ```
+
+## Kubernetes (Helm) Installation
+
+:::tip
+Use our official [Helm](https://helm.sh/) charts to deploy GrowthBook on Kubernetes:
+- For production and scalable cloud-native deployments, use GCP (GKE) or AWS (EKS).
+- For local testing and development, use Minikube.
+:::
+
+### Minimal Prerequisites
+
+Before you apply the example values files, make sure you complete these minimal prerequisites for your environment:
+
+1. Ensure you have access to a running Kubernetes cluster ([Minikube](https://minikube.sigs.k8s.io/docs/start/?arch=%2Fmacos%2Farm64%2Fstable%2Fbinary+download), [GKE](https://cloud.google.com/kubernetes-engine?hl=en), or [EKS](https://aws.amazon.com/eks/)) with permissions to deploy workloads, required controllers (such as load balancer controllers) installed, and both [Helm](https://helm.sh/) and [kubectl](https://kubernetes.io/docs/reference/kubectl/) available.
+
+2. Generate and Store JWT and encryption secrets for backend authentication and encryption.
+
+```bash
+openssl rand -hex 32  # Run twice, once for each secret
+```
+
+Store them as Kubernetes secrets in the same namespace as the one where the chart will be installed (replace the values with your generated secrets):
+
+```bash
+kubectl create secret generic jwt-secret \
+  --from-literal=jwt-secret=YOUR_JWT_SECRET
+kubectl create secret generic encryption-key \
+  --from-literal=encryption-key=YOUR_ENCRYPTION_KEY
+```
+
+Reference these secrets in your environment specific values file in step 3.
+
+3. In the next step you will need to decide on which environment to deploy to and configure your values files accordingly before installation.
+
+### Environment-Specific Values
+
+<Tabs>
+  <TabItem value="aws" label="AWS (EKS)">
+    <div>
+      <div className="admonition note">
+        <p>
+          <strong>Default hostnames below use sslip.io for quick testing.</strong><br/>
+          For production, use a domain registered in your cloud provider's DNS (e.g., Route53 for AWS).<br/>
+          The hostnames in the values file must match the domain you intend to use for Ingress.<br/>
+          <strong>Replace INGRESS_IP with the external IP assigned to your Ingress object.</strong>
+        </p>
+      </div>
+      <details>
+        <summary>Minimal values-aws.yaml</summary>
+
+```yaml
+global:
+  env:
+    - name: APP_ORIGIN
+      # For testing only! Replace with your real domain for production.
+      value: http://growthbook.<INGRESS_IP>.sslip.io
+
+frontend:
+  service:
+    name: frontend
+    port: 3000
+    targetPort: 3000
+  env:
+    - name: API_HOST
+      # For testing only! Replace with your real domain for production.
+      value: http://api.<INGRESS_IP>.sslip.io
+
+backend:
+  mongodbEnabled: true
+  service:
+    name: backend
+    port: 3100
+    targetPort: 3100
+  env:
+    - name: JWT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: jwt-secret
+          key: jwt-secret
+    - name: ENCRYPTION_KEY
+      valueFrom:
+        secretKeyRef:
+          name: encryption-key
+          key: encryption-key
+    - name: UPLOAD_METHOD
+      value: s3
+    # ===== S3 uploads configuration =====
+    - name: S3_BUCKET
+      value: "BUCKET_NAME"
+    # default: us-east-1
+    - name: S3_REGION
+      value: "S3_REGION"
+    # default: https://${S3_BUCKET}.s3.amazonaws.com/
+    - name: S3_DOMAIN
+      value: "https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/"
+
+mongodb:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/scheme: internet-facing
+  hosts:
+    - host: growthbook.<INGRESS_IP>.sslip.io  # For testing only! Replace for production.
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+          service: frontend
+    - host: api.<INGRESS_IP>.sslip.io  # For testing only! Replace for production.
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+          service: backend
+  tls: []
+```
+      </details>
+      Installation:
+      ```bash
+      helm install growthbook growthbook/growthbook -f values-aws.yaml
+      ```
+      <div className="admonition info">
+        <p>
+          <strong>After Install: Update Hostnames</strong><br/>
+          1. Wait for your Ingress object to be assigned an external IP. This might take anywhere from 3 to 5 minutes.<br/>
+          2. Update your <code>values-aws.yaml</code> file to use this IP in all <code>sslip.io</code> hostnames.<br/>
+          3. Run <code>helm upgrade --install growthbook growthbook/growthbook -f values-aws.yaml</code> to apply the change.<br/>
+        </p>
+      </div>
+    </div>
+  </TabItem>
+  <TabItem value="gcp" label="GCP">
+    <div>
+      <div className="admonition note">
+        <p>
+          <strong>Default hostnames below use sslip.io for quick testing.</strong><br/>
+          For production, use a domain registered in your cloud provider's DNS (e.g., Cloud DNS for GCP).<br/>
+          The hostnames in the values file must match the domain you intend to use for Ingress.<br/>
+          <strong>Replace INGRESS_IP with the external IP assigned to your Ingress object.</strong>
+        </p>
+      </div>
+      <details>
+        <summary>Minimal values-gcp.yaml</summary>
+
+```yaml
+global:
+  env:
+    - name: APP_ORIGIN
+      # For testing only! Replace with your real domain for production.
+      value: http://growthbook.<INGRESS_IP>.sslip.io
+
+frontend:
+  service:
+    annotations:
+      cloud.google.com/neg: '{"ingress": true}'
+    name: frontend
+    port: 3000
+    targetPort: 3000
+  env:
+    - name: API_HOST
+      # For testing only! Replace with your real domain for production.
+      value: http://api.<INGRESS_IP>.sslip.io
+
+backend:
+  mongodbEnabled: true
+  volumeClaim:
+    enabled: false
+  service:
+    annotations:
+      cloud.google.com/neg: '{"ingress": true}'
+    name: backend
+    port: 3100
+    targetPort: 3100
+  env:
+    - name: JWT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: jwt-secret
+          key: jwt-secret
+    - name: ENCRYPTION_KEY
+      valueFrom:
+        secretKeyRef:
+          name: encryption-key
+          key: encryption-key
+    - name: UPLOAD_METHOD
+      value: google-cloud
+    - name: GCS_BUCKET_NAME
+      value: "BUCKET_NAME"
+    - name: GCS_DOMAIN
+      value: "https://storage.googleapis.com/BUCKET_NAME/"
+
+mongodb:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: "gce"
+  annotations:
+    kubernetes.io/ingress.class: gce
+  hosts:
+    - host: growthbook.<INGRESS_IP>.sslip.io  # For testing only! Replace for production.
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+          backend:
+            service:
+              name: frontend
+              port:
+                number: 3000
+    - host: api.<INGRESS_IP>.sslip.io  # For testing only! Replace for production.
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+          backend:
+            service:
+              name: backend
+              port:
+                number: 3100
+  tls: []
+```
+      </details>
+      Installation:
+      ```bash
+      helm install growthbook growthbook/growthbook -f values-gcp.yaml
+      ```
+      <div className="admonition info">
+        <p>
+          <strong>After Install: Update Hostnames</strong><br/>
+          1. Wait for your Ingress object to be assigned an external IP.<br/>
+          2. Update your <code>values-gcp.yaml</code> file to use this IP in all <code>sslip.io</code> hostnames.<br/>
+          3. Run <code>helm upgrade --install growthbook growthbook/growthbook -f values-gcp.yaml</code> to apply the change.<br/>
+        </p>
+      </div>
+    </div>
+  </TabItem>
+  <TabItem value="minikube" label="Minikube">
+    <div>
+      <div className="admonition note">
+        <p>
+          Minikube is for local testing and development only, not for production.<br/>
+          Default hostnames below use sslip.io for quick testing.<br/>
+          Replace <code>MINIKUBE_IP</code> with the output of <code>minikube ip</code>.
+        </p>
+      </div>
+      <details>
+        <summary>Minimal values-minikube.yaml</summary>
+
+```yaml
+global:
+  security:
+    allowInsecureImages: true
+  env:
+    # Replace <MINIKUBE_IP> with the output of `minikube ip`
+    - name: APP_ORIGIN
+      value: http://growthbook.<MINIKUBE_IP>.sslip.io
+
+frontend:
+  service:
+    name: growthbook-frontend
+    port: 3000
+    targetPort: 3000
+  env:
+    # Replace <MINIKUBE_IP> with the output of `minikube ip`
+    - name: API_HOST
+      value: http://api.<MINIKUBE_IP>.sslip.io
+
+backend:
+  mongodbEnabled: true
+  volumeClaim:
+    enabled: true
+  service:
+    name: growthbook-backend
+    port: 3100
+    targetPort: 3100
+  env:
+    - name: JWT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: jwt-secret
+          key: jwt-secret
+    - name: ENCRYPTION_KEY
+      valueFrom:
+        secretKeyRef:
+          name: encryption-key
+          key: encryption-key
+    - name: UPLOAD_METHOD
+      value: local
+
+mongodb:
+  enabled: true
+  persistence:
+    enabled: true
+  # Only needed if running Minikube on Apple Silicon (M1/M2/M3)
+  # image:
+  #   registry: docker.io
+  #   repository: dlavrenuek/bitnami-mongodb-arm
+  #   tag: 7.0.15
+
+ingress:
+  className: "nginx"
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  enabled: true
+  hosts:
+    - host: growthbook.<MINIKUBE_IP>.sslip.io
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+          backend:
+            service:
+              name: growthbook-frontend
+              port:
+                number: 3000
+    - host: api.<MINIKUBE_IP>.sslip.io
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+          backend:
+            service:
+              name: growthbook-backend
+              port:
+                number: 3100
+  tls: []
+```
+      </details>
+      Installation:
+      ```bash
+      helm install growthbook growthbook/growthbook -f values-minikube.yaml
+      ```
+    </div>
+  </TabItem>
+</Tabs>
+
+### Accessing GrowthBook
+
+After deploying with Helm, access GrowthBook using the Ingress hostnames you configured in your values file:
+
+- **Minikube:**
+  - Frontend: `http://growthbook.<MINIKUBE_IP>.sslip.io`
+  - Backend/API: `http://api.<MINIKUBE_IP>.sslip.io`
+  - (Replace `<MINIKUBE_IP>` with the output of `minikube ip`)
+
+- **AWS & GCP**
+  - Use the hostname you set in your values file
+  - Check yourIngress/ALB resource for the external DNS name if using AWS Load Balancer Controller or domain if using a cloud-managed Ingress
+
+> Open the frontend URL in your browser to start using GrowthBook. The backend/API URL is used by the frontend and for API access.
+
+### Advanced configuration
+
+For advanced configuration (S3, custom secrets, email, etc.), see the [full values.yaml](https://github.com/growthbook/growthbook/tree/main/charts/growthbook/values.yaml).
+
+### Troubleshooting
+
+If something isn't working as expected, use these commands to check the status of your resources:
+
+- List all pods and their status:
+  ```bash
+  kubectl get pods -A
+  ```
+- Describe a specific pod (replace `POD_NAME` and `NAMESPACE`):
+  ```bash
+  kubectl describe pod POD_NAME -n NAMESPACE
+  ```
+- Check the status of your services:
+  ```bash
+  kubectl get svc -A
+  ```
+- Inspect your Ingress resources:
+  ```bash
+  kubectl get ingress -A
+  kubectl describe ingress INGRESS_NAME -n NAMESPACE
+  ```
+- View logs for a pod (replace `POD_NAME` and `NAMESPACE`):
+  ```bash
+  kubectl logs POD_NAME -n NAMESPACE
+  ```
+
+If you see errors or resources stuck in Pending/CrashLoopBackOff, use `describe` and `logs` to investigate further. Make sure your Ingress controller is running and that your LoadBalancer/Ingress has an external IP assigned.
+
+## Docker Compose vs. Kubernetes
+
+:::caution
+For quick local development, Docker Compose is fastest. For production, use Kubernetes.
+:::
